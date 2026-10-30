@@ -26,6 +26,7 @@ Secrets (environment variables, or Streamlit Cloud: App settings -> Secrets)
 
 from __future__ import annotations
 
+import hmac
 import html
 import os
 from pathlib import Path
@@ -65,15 +66,35 @@ EXAMPLES = [
 # Small helpers
 # ---------------------------------------------------------------------------
 def password_gate():
-    pw = os.getenv("APP_PASSWORD")
-    if not pw or ss.get("authed"):
+    """
+    Always on. The app writes to your turbopuffer account, so nobody gets in
+    without APP_PASSWORD. If it isn't set, show how to set it instead of
+    opening the app. Hobby-grade protection: one shared password, kept for
+    the browser session, not a real login system.
+    """
+    if ss.get("authed"):
         return
-    st.title("Parse, chunk, search")
-    entered = st.text_input("Password", type="password")
-    if entered and entered == pw:
-        ss["authed"] = True
-        st.rerun()
-    elif entered:
+    st.title("Parse → chunk → search")
+    st.caption("A personal hobby project. Not affiliated with turbopuffer.")
+    pw = os.getenv("APP_PASSWORD")
+    if not pw:
+        st.warning("This app needs a password before it will open.")
+        st.markdown(
+            "Set `APP_PASSWORD`, then reload:\n\n"
+            "- **Running locally:** add `APP_PASSWORD=choose-one` to your `.env` file and load it "
+            "(`set -a; source .env; set +a`) before `streamlit run app.py`.\n"
+            "- **Streamlit Community Cloud:** App settings → Secrets → add `APP_PASSWORD = \"choose-one\"`, "
+            "then reboot the app."
+        )
+        st.stop()
+    with st.form("login"):
+        entered = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Enter")
+    if submitted:
+        # compare_digest avoids leaking how many characters matched via timing
+        if hmac.compare_digest(entered.encode(), pw.encode()):
+            ss["authed"] = True
+            st.rerun()
         st.error("That's not it.")
     st.stop()
 
@@ -137,6 +158,9 @@ with st.sidebar:
     st.write("turbopuffer: " + ("✅" if os.getenv("TURBOPUFFER_API_KEY") else "❌ not set"))
     st.write("Claude (optional): " + ("✅" if os.getenv("ANTHROPIC_API_KEY") else "not set"))
     st.caption(f"Region `{search.REGION}` · embedding `{search.EMBED_MODEL}`")
+    if st.button("Log out"):
+        ss.clear()
+        st.rerun()
     st.divider()
     if st.button("Delete this app's namespaces"):
         t = tpuf_or_none()
@@ -153,8 +177,12 @@ with t_parse:
                 "header and footer that would otherwise end up in every chunk.")
     engines = [e for e in parse.available_engines() if e != "raw"]
     if not engines:
-        st.error("No Markdown parser installed. Run `pip install -r requirements.txt`.")
-        st.stop()
+        # Keep going with raw text so the rest of the app still works, but say why.
+        why = parse.missing_reasons().get("pymupdf", "unknown error")
+        st.warning("No structured parser could be loaded, so this falls back to raw text "
+                   f"(chunks won't have headings).\n\nReason: `{why}`\n\n"
+                   "Fix: `pip install -r requirements.txt` (it needs the `pymupdf` package).")
+        engines = ["raw"]
     engine = st.radio("Structured parser", engines, format_func=lambda e: parse.ENGINES[e], horizontal=True)
     if ss.get("parsed_key") != (ss["doc_id"], engine):
         with st.spinner(f"Parsing with {engine}…"):

@@ -36,20 +36,30 @@ ENGINES = {
 }
 
 
+_MISSING: dict[str, str] = {}
+
+
 def available_engines() -> list[str]:
     """Which parsers are installed. Docling is optional."""
     out = ["raw"]
+    # Note: pymupdf4llm 2.x ships inside the "pymupdf" package. Installing the
+    # separate "pymupdf4llm" package alone gives you nothing importable.
     try:
         import pymupdf4llm  # noqa: F401
         out.append("pymupdf")
-    except Exception:
-        pass
+    except Exception as e:
+        _MISSING["pymupdf"] = f"{type(e).__name__}: {e}"
     try:
         import docling  # noqa: F401
         out.append("docling")
-    except Exception:
-        pass
+    except Exception as e:
+        _MISSING["docling"] = f"{type(e).__name__}: {e}"
     return out
+
+
+def missing_reasons() -> dict[str, str]:
+    """Why each unavailable parser failed to import (after available_engines())."""
+    return dict(_MISSING)
 
 
 def raw_text(pdf_bytes: bytes) -> tuple[str, int]:

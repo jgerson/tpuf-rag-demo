@@ -31,16 +31,16 @@ PDF ──parse──▶ Markdown ──chunk──▶ chunks ──write──�
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env          # then fill in your keys
+cp .env.example .env          # then set APP_PASSWORD and your keys
 set -a; source .env; set +a   # load them into this shell
 streamlit run app.py
 ```
 
-Parsing and chunking work without any keys. Writing and searching need `TURBOPUFFER_API_KEY`; the written answer needs `ANTHROPIC_API_KEY`. The semantic chunker downloads a small (~130 MB) embedding model from Hugging Face the first time it runs.
+The app asks for a password first: set `APP_PASSWORD` in `.env` (it won't open without one, since it writes to your turbopuffer account). Parsing and chunking work without any API keys. Writing and searching need `TURBOPUFFER_API_KEY`; the written answer needs `ANTHROPIC_API_KEY`. The semantic chunker downloads a small (~130 MB) embedding model from Hugging Face the first time it runs.
 
 **Better parsing, optional:** `pip install -r requirements-docling.txt` adds IBM's Docling as a third parser. It's noticeably better on messy layouts but pulls in PyTorch, so it's left out of the default install and won't fit on free hosting.
 
-**Deploying (optional):** on Streamlit Community Cloud, create an app from this repo with `app.py` as the main file and add the keys from `.streamlit/secrets.toml.example` under Advanced settings → Secrets. Set `APP_PASSWORD` too, since the app writes to your turbopuffer account.
+**Deploying (optional):** on Streamlit Community Cloud, create an app from this repo with `app.py` as the main file and add the keys from `.streamlit/secrets.toml.example` under Advanced settings → Secrets, including `APP_PASSWORD`. The password is a single shared one kept for the browser session: fine for a hobby demo, not a real login system.
 
 ## Demo script
 

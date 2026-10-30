@@ -3,7 +3,7 @@ streamlit>=1.50
 turbopuffer>=3.0
 anthropic>=0.40
 pypdf>=5.0
-pymupdf4llm>=0.2
+pymupdf>=1.26        # provides pymupdf4llm (PDF -> Markdown); the standalone pymupdf4llm package installs nothing on its own
 chonkie>=1.5
 model2vec>=0.4
 numpy
