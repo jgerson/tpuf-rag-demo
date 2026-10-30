@@ -13,6 +13,19 @@ Most "chat with your docs" failures happen before the database is involved: the 
 
 There's also `walkthrough.ipynb`, which runs the same pipeline one step at a time.
 
+## Agentic RAG with `ask.py`
+
+`ask.py` is a small command-line toolbox meant to be driven by an AI agent rather than a person: Claude in a chat, or Claude Code on your laptop, runs the commands as its tools. The agent reads the table of contents, breaks a question into parts, runs narrow searches (choosing vector, keyword or hybrid, and filtering by section), and answers with citations. No Anthropic API key is needed; the agent is whichever Claude you're already using.
+
+```bash
+python ask.py load                                   # parse, chunk (~300 tokens), write to turbopuffer
+python ask.py sections                               # table of contents
+python ask.py search "approval over 500" --mode keyword --section Expenses -k 2
+python ask.py around 5                               # chunk 5 and its neighbours
+```
+
+To try it with Claude Code: load your `.env`, start `claude` in the repo folder, and ask something like *"Use `python ask.py` as your search tool (run it with --help first). I'm going to London for three days and want to expense a $600 hotel: what can I spend on meals, and who approves the hotel? Show each search you run."* A good comparison is to run the same question once with a single `search` call (classic RAG) and once letting the agent plan its own searches.
+
 ## How it works
 
 ```

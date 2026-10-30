@@ -115,12 +115,19 @@ def _row(r) -> dict:
     return d
 
 
-def search(tpuf, doc_id: str, strategy: str, question: str, mode: str = "hybrid", top_k: int = 5) -> dict:
-    """Run one search. Returns rows plus timing and a note if something fell back."""
+def search(tpuf, doc_id: str, strategy: str, question: str, mode: str = "hybrid", top_k: int = 5,
+           section: str | None = None) -> dict:
+    """
+    Run one search. Returns rows plus timing and a note if something fell back.
+    section: optional prefix such as "Travel" to search only that part of the
+    document (a turbopuffer Glob filter on the section attribute).
+    """
     ns = tpuf.namespace(namespace_name(doc_id, strategy))
     by_meaning = ("content", "ANN", ("Embed", question))
     by_keyword = ("content", "BM25", question)
     base = {"top_k": top_k, "include_attributes": ATTRS}
+    if section:
+        base["filters"] = ("section", "Glob", f"{section}*")
     note = ""
     t0 = time.time()
     if mode == "vector":
