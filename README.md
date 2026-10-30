@@ -2,7 +2,7 @@
 
 > **A personal hobby project.** I built this to learn how document retrieval pipelines work end to end. It isn't affiliated with or endorsed by turbopuffer, it isn't production code, and the sample company and handbook are fictional.
 
-Most "chat with your docs" failures happen before the database is involved: the PDF was parsed badly, or the chunks were cut in the wrong places. This small Streamlit app makes those upstream steps visible. It walks one document through four stages and lets you compare choices side by side:
+Most "chat with your docs" failures happen before the database is involved: the PDF was parsed badly, or the chunks were cut in the wrong places. This small Streamlit app makes those upstream steps visible. It walks one document through five stages and lets you compare choices side by side:
 
 | Tab | What it shows |
 |---|---|
@@ -10,12 +10,13 @@ Most "chat with your docs" failures happen before the database is involved: the 
 | **2 · Chunk** | The same Markdown split two ways, colour-coded: **structure-aware recursive** (cuts at headings, then paragraphs, then sentences) and **semantic** (embeds every sentence and cuts where the topic shifts). A chart shows each similarity score and why it cut. |
 | **3 · Store** | Both sets of chunks written to [turbopuffer](https://turbopuffer.com), one namespace per strategy. turbopuffer embeds the text itself (native embedding) and builds a BM25 index. |
 | **4 · Search** | Vector, keyword (BM25), hybrid and reranked search side by side, or the same mode across both chunking strategies. Shows the exact SDK call, fetches neighbouring chunks ("small to big"), and optionally has Claude write an answer with citations. |
+| **5 · Agent** | Classic RAG and agentic RAG answer the same multi-part question side by side. Classic runs one search and one Claude call; the agent gets search *tools* and decides what to look for, turn by turn. Every request, response and tool call is shown, with Claude's stated reason for each, plus LLM turns, turbopuffer queries, search time and tokens. Needs `ANTHROPIC_API_KEY`. |
 
 There's also `walkthrough.ipynb`, which runs the same pipeline one step at a time.
 
-## Agentic RAG with `ask.py`
+## Agentic RAG without an API key: `ask.py`
 
-`ask.py` is a small command-line toolbox meant to be driven by an AI agent rather than a person: Claude in a chat, or Claude Code on your laptop, runs the commands as its tools. The agent reads the table of contents, breaks a question into parts, runs narrow searches (choosing vector, keyword or hybrid, and filtering by section), and answers with citations. No Anthropic API key is needed; the agent is whichever Claude you're already using.
+The Agent tab needs an Anthropic API key. `ask.py` is the no-key alternative: a small command-line toolbox meant to be driven by an AI agent rather than a person: Claude in a chat, or Claude Code on your laptop, runs the commands as its tools. The agent reads the table of contents, breaks a question into parts, runs narrow searches (choosing vector, keyword or hybrid, and filtering by section), and answers with citations. No Anthropic API key is needed; the agent is whichever Claude you're already using.
 
 ```bash
 python ask.py load                                   # parse, chunk (~300 tokens), write to turbopuffer
@@ -37,7 +38,8 @@ PDF ──parse──▶ Markdown ──chunk──▶ chunks ──write──�
 
 - `pipeline/parse.py`: three parsers to compare, plus a cleanup step that drops lines repeated on most pages
 - `pipeline/chunk.py`: recursive splitting via [Chonkie](https://github.com/chonkie-inc/chonkie), and a ~40-line semantic chunker written by hand so every decision is visible. Optional heading-path prefix ("Time off > Parental leave") so chunks keep their context.
-- `pipeline/search.py`: writes, four search modes, neighbour expansion, and the Claude answer
+- `pipeline/search.py`: writes, four search modes, section filters, neighbour expansion, and the Claude answer
+- `pipeline/agent.py`: classic RAG vs a short, readable Claude tool-use loop (capped at 6 rounds), recording every step for the Agent tab
 - `scripts/make_sample_pdf.py`: builds the fictional handbook, deliberately messy (running headers, a two-column page, a table)
 
 ## Running it
@@ -49,7 +51,7 @@ set -a; source .env; set +a   # load them into this shell
 streamlit run app.py
 ```
 
-The app asks for a password first: set `APP_PASSWORD` in `.env` (it won't open without one, since it writes to your turbopuffer account). Parsing and chunking work without any API keys. Writing and searching need `TURBOPUFFER_API_KEY`; the written answer needs `ANTHROPIC_API_KEY`. The semantic chunker downloads a small (~130 MB) embedding model from Hugging Face the first time it runs.
+The app asks for a password first: set `APP_PASSWORD` in `.env` (it won't open without one, since it writes to your turbopuffer account). Parsing and chunking work without any API keys. Writing and searching need `TURBOPUFFER_API_KEY`; the written answer and the Agent tab need `ANTHROPIC_API_KEY` (each agent run costs a fraction of a cent). The semantic chunker downloads a small (~130 MB) embedding model from Hugging Face the first time it runs.
 
 **Better parsing, optional:** `pip install -r requirements-docling.txt` adds IBM's Docling as a third parser. It's noticeably better on messy layouts but pulls in PyTorch, so it's left out of the default install and won't fit on free hosting.
 
