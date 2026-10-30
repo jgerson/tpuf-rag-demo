@@ -1,0 +1,4 @@
+# Optional: adds IBM's Docling as a third parser. Heavy (pulls in PyTorch),
+# so it's separate from requirements.txt. Install with:
+#   pip install -r requirements.txt -r requirements-docling.txt
+docling>=2.0

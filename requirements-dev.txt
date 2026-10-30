@@ -1,0 +1,4 @@
+# Only needed to regenerate the sample PDF or the notebook.
+reportlab>=4.0
+nbformat>=5.0
+jupyter
