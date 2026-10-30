@@ -2,7 +2,7 @@
 
 > **A personal hobby project.** I built this to learn how document retrieval pipelines work end to end. It isn't affiliated with or endorsed by turbopuffer, it isn't production code, and the sample company and handbook are fictional.
 
-Most "chat with your docs" failures happen before the database is involved: the PDF was parsed badly, or the chunks were cut in the wrong places. This small Streamlit app makes those upstream steps visible. It walks one document through five stages and lets you compare choices side by side:
+Most "chat with your docs" failures happen before the database is involved: the PDF was parsed badly, or the chunks were cut in the wrong places. This small Streamlit app makes those upstream steps visible. It walks one document through five stages, plus two standalone demos, and lets you compare choices side by side:
 
 | Tab | What it shows |
 |---|---|
@@ -11,6 +11,8 @@ Most "chat with your docs" failures happen before the database is involved: the 
 | **3 · Store** | Both sets of chunks written to [turbopuffer](https://turbopuffer.com), one namespace per strategy. turbopuffer embeds the text itself (native embedding) and builds a BM25 index. |
 | **4 · Search** | Vector, keyword (BM25), hybrid and reranked search side by side, or the same mode across both chunking strategies. Shows the exact SDK call, fetches neighbouring chunks ("small to big"), and optionally has Claude write an answer with citations. |
 | **5 · Agent** | Classic RAG and agentic RAG answer the same multi-part question side by side. Classic runs one search and one Claude call; the agent gets search *tools* and decides what to look for, turn by turn. Every request, response and tool call is shown, with Claude's stated reason for each, plus LLM turns, turbopuffer queries, search time and tokens. Needs `ANTHROPIC_API_KEY`. |
+| **6 · Permissions** | Ten fictional company documents, some confidential, each tagged with the groups allowed to read it. Ask one question as four people (barista, manager, finance lead, people team) and see different results. Switch enforcement between filtering **inside turbopuffer** (`("groups", "ContainsAny", user_groups)`, correct), filtering **in the app after search** (safe, but restricted results waste top-k slots so people get fewer answers), and **no filter** (confidential text leaks to the user and to the LLM). |
+| **7 · Code search** | A codebase indexed **by function** with Python's parser: this demo's own code, or any public GitHub repo (e.g. `psf/requests`). Compare plain grep with turbopuffer search, then race a **grep-and-read agent** against a **search-and-read agent** on the same question, with the same trace and metrics as tab 5. |
 
 There's also `walkthrough.ipynb`, which runs the same pipeline one step at a time.
 
@@ -23,6 +25,12 @@ python ask.py load                                   # parse, chunk (~300 tokens
 python ask.py sections                               # table of contents
 python ask.py search "approval over 500" --mode keyword --section Expenses -k 2
 python ask.py around 5                               # chunk 5 and its neighbours
+
+# code search over any local folder of Python (defaults to this repo)
+python ask.py code-load --dir ../requests            # index every function
+python ask.py code-search "how many redirects are allowed" --dir ../requests
+python ask.py grep "max_redirects" --dir ../requests
+python ask.py read src/requests/sessions.py 186 230 --dir ../requests
 ```
 
 To try it with Claude Code: load your `.env`, start `claude` in the repo folder, and ask something like *"Use `python ask.py` as your search tool (run it with --help first). I'm going to London for three days and want to expense a $600 hotel: what can I spend on meals, and who approves the hotel? Show each search you run."* A good comparison is to run the same question once with a single `search` call (classic RAG) and once letting the agent plan its own searches.
@@ -39,7 +47,9 @@ PDF ──parse──▶ Markdown ──chunk──▶ chunks ──write──�
 - `pipeline/parse.py`: three parsers to compare, plus a cleanup step that drops lines repeated on most pages
 - `pipeline/chunk.py`: recursive splitting via [Chonkie](https://github.com/chonkie-inc/chonkie), and a ~40-line semantic chunker written by hand so every decision is visible. Optional heading-path prefix ("Time off > Parental leave") so chunks keep their context.
 - `pipeline/search.py`: writes, four search modes, section filters, neighbour expansion, and the Claude answer
-- `pipeline/agent.py`: classic RAG vs a short, readable Claude tool-use loop (capped at 6 rounds), recording every step for the Agent tab
+- `pipeline/agent.py`: classic RAG vs a short, readable Claude tool-use loop (capped at 6 rounds), recording every step; the same loop drives the two code agents
+- `pipeline/permissions.py`: the fictional documents, people and groups, and the three enforcement modes
+- `pipeline/codesearch.py`: function-level chunking with `ast`, a GitHub zip loader, grep and line reading
 - `scripts/make_sample_pdf.py`: builds the fictional handbook, deliberately messy (running headers, a two-column page, a table)
 
 ## Running it
@@ -73,9 +83,16 @@ Questions that each show something specific. All answers are in the sample handb
 
 Then try the toggles on tab 2: turn off **Prepend heading path**, re-write on tab 3, and see which questions get worse.
 
+## Demo script: permissions and code search
+
+**Permissions (tab 6).** Ask "What's the pay range for a roastery supervisor?" with the correct mode: Sam and Lee see only the public pay schedule, Priya and Dana see the salary bands. Switch to *after search* and Sam's results shrink to one. Switch to *no filter* and the barista sees managers' salary bands, which is exactly what an LLM would then repeat. Also try "Are any of our cafes closing?" (the draft restructuring plan).
+
+**Code search (tab 7).** On `psf/requests`, ask "How many redirects will requests follow before giving up?". Grepping `redirect` returns about 200 matching lines; turbopuffer search goes straight to `SessionRedirectMixin.resolve_redirects`. Then race the agents and compare LLM turns and tokens: the grep agent spends its turns narrowing patterns, the search agent spends them reading the right code.
+
 ## Notes
 
-- Everything is written to namespaces starting with `tpragdemo-`. The sidebar button deletes them.
+- Everything is written to namespaces starting with `tpragdemo-`, including `tpragdemo-permissions` and `tpragdemo-code-*`. The sidebar button deletes them all.
+- Code search reads Python files only and caps a repo at 400 files and 3,000 chunks, so a huge repo can't run up your bill.
 - Defaults match the turbopuffer setup I used elsewhere: region `gcp-us-central1`, embedding model `nvidia/nemotron-3-embed-8b`. Override with the environment variables in `.env.example`. Native embedding and reranking depend on your turbopuffer plan.
 - Chunk sizes are in characters, not tokens, to keep things simple (roughly 4 characters per token in English).
 - Costs: parsing and chunking are free and local. turbopuffer usage for a document this size is tiny, but turbopuffer has a monthly minimum on paid plans. Claude answers cost a fraction of a cent each.

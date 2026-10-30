@@ -198,23 +198,24 @@ def _run_tool(name: str, args: dict, ctx: dict, run: Run) -> tuple[str, Step]:
     return f"Unknown tool {name}", Step("tool (local)", f"unknown tool {name}")
 
 
-def agent(tpuf, doc_id: str, strategy: str, question: str, md: str, client=None,
-          max_rounds: int = MAX_TOOL_ROUNDS) -> Run:
-    run = Run("agent", question)
-    t0 = time.time()
-    client = client or _claude()
-    ctx = {"tpuf": tpuf, "doc_id": doc_id, "strategy": strategy, "md": md}
-    messages: list = [{"role": "user", "content": question}]
-    run.steps.append(Step("app → Claude", "Question plus tool definitions, no chunks",
-                          sent="tools: " + ", ".join(t["name"] for t in TOOLS) + f"\n\nuser: {question}",
-                          why="Claude gets tools instead of results, so it decides what to search for."))
+def tool_loop(run: Run, client, system: str, tools: list, question: str, execute,
+              max_rounds: int = MAX_TOOL_ROUNDS, intro_why: str = "") -> Run:
+    """
+    The whole agent, in one loop. Shared by the handbook agent and the code agents.
 
+    execute(name, args) runs one tool and returns (text for Claude, trace Step).
+    """
+    t0 = time.time()
+    messages: list = [{"role": "user", "content": question}]
+    run.steps.append(Step("app → Claude", "Question plus tool definitions, no results yet",
+                          sent="tools: " + ", ".join(t["name"] for t in tools) + f"\n\nuser: {question}",
+                          why=intro_why or "Claude gets tools instead of results, so it decides what to look for."))
     rounds = 0
     while True:
         force_answer = rounds >= max_rounds
         kwargs = {"tool_choice": {"type": "none"}} if force_answer else {}
-        msg = client.messages.create(model=search.CLAUDE_MODEL, max_tokens=800, system=AGENT_SYSTEM,
-                                     tools=TOOLS, messages=messages, **kwargs)
+        msg = client.messages.create(model=search.CLAUDE_MODEL, max_tokens=900, system=system,
+                                     tools=tools, messages=messages, **kwargs)
         _count_usage(run, msg)
         said = " ".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
         calls = [b for b in msg.content if getattr(b, "type", "") == "tool_use"]
@@ -224,7 +225,7 @@ def agent(tpuf, doc_id: str, strategy: str, question: str, md: str, client=None,
             if force_answer:
                 run.note = f"Hit the {max_rounds}-round cap, so Claude was told to answer with what it had."
             run.steps.append(Step("Claude → app", "Final answer", received=f"stop_reason: {msg.stop_reason}\n\n{said}",
-                                  why="end_turn ends the loop: Claude judged every part covered (or ran out of rounds)."))
+                                  why="end_turn ends the loop: Claude judged it had enough (or ran out of rounds)."))
             break
 
         listed = "\n".join(f"{c.name}({json.dumps(c.input)})" for c in calls)
@@ -234,7 +235,10 @@ def agent(tpuf, doc_id: str, strategy: str, question: str, md: str, client=None,
         messages.append({"role": "assistant", "content": msg.content})
         results = []
         for c in calls:
-            text, step = _run_tool(c.name, dict(c.input or {}), ctx, run)
+            try:
+                text, step = execute(c.name, dict(c.input or {}))
+            except Exception as e:  # a failing tool shouldn't kill the run; tell Claude instead
+                text, step = f"Tool error: {e}", Step("tool (local)", f"{c.name} failed", received=str(e)[:300])
             step.why = step.why or "The result goes back to Claude as a tool_result matched to this call's id."
             run.steps.append(step)
             results.append({"type": "tool_result", "tool_use_id": c.id, "content": text})
@@ -242,8 +246,93 @@ def agent(tpuf, doc_id: str, strategy: str, question: str, md: str, client=None,
         run.steps.append(Step("app → Claude", f"Returns {len(results)} tool result{'s' if len(results) > 1 else ''}",
                               sent=f"The whole conversation so far ({len(messages)} messages) plus the new results. "
                                    "The API is stateless, so every turn resends everything.",
-                              why="Claude decides again: search more, read around a chunk, or answer."))
+                              why="Claude decides again: look further, or answer."))
         rounds += 1
 
     run.seconds = round(time.time() - t0, 2)
     return run
+
+
+def agent(tpuf, doc_id: str, strategy: str, question: str, md: str, client=None,
+          max_rounds: int = MAX_TOOL_ROUNDS) -> Run:
+    """The handbook agent: sections, search_docs and read_around over one document."""
+    run = Run("agent", question)
+    ctx = {"tpuf": tpuf, "doc_id": doc_id, "strategy": strategy, "md": md}
+    return tool_loop(run, client or _claude(), AGENT_SYSTEM, TOOLS, question,
+                     lambda name, args: _run_tool(name, args, ctx, run), max_rounds)
+
+
+# ---------------------------------------------------------------------------
+# Code agents: grep-and-read vs turbopuffer search (tab 7)
+# ---------------------------------------------------------------------------
+READ_TOOL = {
+    "name": "read_lines",
+    "description": "Read lines start..end (inclusive, max 120) of one file, with line numbers.",
+    "input_schema": {"type": "object", "properties": {"path": {"type": "string"},
+                                                      "start": {"type": "integer"}, "end": {"type": "integer"}},
+                     "required": ["path", "start", "end"]},
+}
+GREP_TOOL = {
+    "name": "grep",
+    "description": "Case-insensitive regex search over every line of every file. Returns up to 40 matching "
+                   "lines as path:line: text, plus the total match count. Optional path_prefix narrows it.",
+    "input_schema": {"type": "object", "properties": {"pattern": {"type": "string"},
+                                                      "path_prefix": {"type": "string"}},
+                     "required": ["pattern"]},
+}
+SEARCH_CODE_TOOL = {
+    "name": "search_code",
+    "description": "Search the codebase in turbopuffer. Each result is one function, method or class with its "
+                   "path, line range and first lines. mode: 'hybrid' (default), 'vector' for behaviour described "
+                   "in plain words, 'keyword' for exact identifiers. Optional path_prefix narrows it.",
+    "input_schema": {"type": "object", "properties": {"query": {"type": "string"},
+                                                      "mode": {"type": "string", "enum": ["hybrid", "vector", "keyword"]},
+                                                      "path_prefix": {"type": "string"},
+                                                      "k": {"type": "integer", "minimum": 1, "maximum": 8}},
+                     "required": ["query"]},
+}
+
+CODE_SYSTEM = (
+    "You answer questions about a Python codebase using only the tools provided. Find the relevant code, read "
+    "it, and answer in a few sentences naming the file, function and line numbers. Before each tool call, say in "
+    "one short sentence why you're making it. Be efficient: stop as soon as you can answer."
+)
+
+
+def code_agent(kind: str, files: dict, question: str, tpuf=None, source: str = "", client=None,
+               max_rounds: int = MAX_TOOL_ROUNDS) -> Run:
+    """
+    kind "grep":   tools grep + read_lines, like a coding agent with only a terminal
+    kind "search": tools search_code (turbopuffer) + read_lines
+    Same model, same prompt, same files; only the way of finding code differs.
+    """
+    from . import codesearch as cs
+
+    run = Run(f"code-{kind}", question)
+    tools = [GREP_TOOL, READ_TOOL] if kind == "grep" else [SEARCH_CODE_TOOL, READ_TOOL]
+
+    def execute(name, args):
+        if name == "grep" and kind == "grep":
+            g = cs.grep(files, args.get("pattern", ""), args.get("path_prefix"))
+            text = f"{g['total']} matching lines" + (" (showing 40)" if g["total"] > 40 else "") + ":\n" + "\n".join(g["hits"])
+            return text, Step("tool (local)", f"grep {args.get('pattern')!r}", sent=f"regex over {len(files)} files",
+                              received=_short(text), ms=g["ms"])
+        if name == "search_code" and kind == "search":
+            mode = args.get("mode") if args.get("mode") in ("hybrid", "vector", "keyword") else "hybrid"
+            k = max(1, min(int(args.get("k") or 5), 8))
+            r = cs.search_code(tpuf, source, args.get("query", ""), mode, k, args.get("path_prefix"))
+            run.tpuf_queries += 1
+            run.tpuf_ms += r["ms"]
+            text = cs.hits_text(r["rows"])
+            return text, Step("app → turbopuffer", f"search_code · {mode}",
+                              sent=f'query: {args.get("query")!r}' + (f'\npath_prefix: {args["path_prefix"]!r}' if args.get("path_prefix") else ""),
+                              received=_short(text), ms=r["ms"])
+        if name == "read_lines":
+            text = cs.read_lines(files, args.get("path", ""), args.get("start", 1), args.get("end", 40))
+            return text, Step("tool (local)", f"read_lines {args.get('path')}:{args.get('start')}-{args.get('end')}",
+                              received=_short(text, 500))
+        return f"Unknown tool {name}", Step("tool (local)", f"unknown tool {name}")
+
+    why = ("This agent can only grep and read, like a coding agent with nothing but a terminal."
+           if kind == "grep" else "This agent can search a turbopuffer index of every function, then read.")
+    return tool_loop(run, client or _claude(), CODE_SYSTEM, tools, question, execute, max_rounds, why)
